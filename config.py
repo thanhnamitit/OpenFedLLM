@@ -8,8 +8,6 @@ from accelerate import Accelerator
 import torch
 from datetime import datetime, timedelta
 
-
-# Define and parse arguments.
 @dataclass
 class FedArguments:
     fed_alg: Optional[str] = field(default="fedavg", metadata={"help": "the algorithm to use"})
@@ -26,32 +24,25 @@ class FedArguments:
 
 @dataclass
 class ScriptArguments:
-
     model_name_or_path: Optional[str] = field(default="meta-llama/Llama-2-7b-hf", metadata={"help": "the model name"})
-    dataset_name: Optional[str] = field(
-        default="lucasmccabe-lmi/CodeAlpaca-20k", metadata={"help": "the dataset name"}
-    )
+    dataset_name: Optional[str] = field(default="lucasmccabe-lmi/CodeAlpaca-20k", metadata={"help": "the dataset name"})
     log_with: Optional[str] = field(default="none", metadata={"help": "use 'wandb' to log with wandb"})
-    learning_rate: Optional[float] = field(default=2e-5, metadata={"help": "the learning rate"})    # vicuna and alpaca use 2e-5
+    learning_rate: Optional[float] = field(default=2e-5, metadata={"help": "the learning rate"})
     batch_size: Optional[int] = field(default=16, metadata={"help": "the batch size"})
     seq_length: Optional[int] = field(default=512, metadata={"help": "Input sequence length"})
-    gradient_accumulation_steps: Optional[int] = field(
-        default=1, metadata={"help": "the number of gradient accumulation steps"}
-    )
+    gradient_accumulation_steps: Optional[int] = field(default=1, metadata={"help": "the number of gradient accumulation steps"})
     load_in_8bit: Optional[bool] = field(default=False, metadata={"help": "load the model in 8 bits precision"})
     load_in_4bit: Optional[bool] = field(default=False, metadata={"help": "load the model in 4 bits precision"})
-    use_peft: Optional[bool] = field(default=False, metadata={"help": "Wether to use PEFT or not to train adapters"})
+    use_peft: Optional[bool] = field(default=False, metadata={"help": "Whether to use PEFT or not to train adapters"})
     trust_remote_code: Optional[bool] = field(default=False, metadata={"help": "Enable `trust_remote_code`"})
     output_dir: Optional[str] = field(default="output", metadata={"help": "the output directory"})
     peft_lora_r: Optional[int] = field(default=8, metadata={"help": "the r parameter of the LoRA adapters"})
     peft_lora_alpha: Optional[int] = field(default=16, metadata={"help": "the alpha parameter of the LoRA adapters"})
     logging_steps: Optional[int] = field(default=100, metadata={"help": "the number of logging steps"})
-    use_auth_token: Optional[bool] = field(default=False, metadata={"help": "Use HF auth token to access the model"})   # token and use_auth_token cannot be used together
+    use_auth_token: Optional[bool] = field(default=False, metadata={"help": "Use HF auth token to access the model"})
     num_train_epochs: Optional[int] = field(default=3, metadata={"help": "the number of training epochs"})
     max_steps: Optional[int] = field(default=10, metadata={"help": "the number of training steps"})
-    save_steps: Optional[int] = field(
-        default=1000, metadata={"help": "Number of updates steps before two checkpoint saves"}
-    )
+    save_steps: Optional[int] = field(default=1000, metadata={"help": "Number of updates steps before two checkpoint saves"})
     save_total_limit: Optional[int] = field(default=10, metadata={"help": "Limits total number of checkpoints."})
     push_to_hub: Optional[bool] = field(default=False, metadata={"help": "Push the model to HF Hub"})
     hub_model_id: Optional[str] = field(default=None, metadata={"help": "The name of the model on HF Hub"})
@@ -63,9 +54,12 @@ class ScriptArguments:
     local_data_dir: Optional[str] = field(default=None, metadata={"help": "the local data directory if you want to use downloaded data"})
 
 parser = HfArgumentParser((ScriptArguments, FedArguments))
-script_args, fed_args = parser.parse_args_into_dataclasses()
+script_args, fed_args, remaining_args = parser.parse_args_into_dataclasses(return_remaining_strings=True)
 
-# ===== Define the LoraConfig =====
+if remaining_args:
+    raise ValueError(f"Some specified arguments are not used by the HfArgumentParser: {remaining_args}")
+
+# Define the LoraConfig
 if script_args.use_peft:
     peft_config = LoraConfig(
         r=script_args.peft_lora_r,
@@ -80,7 +74,7 @@ else:
 def get_config():
     return script_args, fed_args, peft_config
 
-# ===== Define the training arguments =====
+# Define the training arguments
 def get_training_args(script_args, new_lr):
     training_args = TrainingArguments(
         output_dir=script_args.output_dir,
@@ -107,7 +101,6 @@ def get_model_config(script_args):
         quantization_config = BitsAndBytesConfig(
             load_in_8bit=script_args.load_in_8bit
         )
-        # Copy the model to each device
         device_map = {"": Accelerator().local_process_index}
         torch_dtype = torch.bfloat16
     elif script_args.load_in_4bit:
@@ -117,7 +110,6 @@ def get_model_config(script_args):
             bnb_4bit_quant_type="nf4",
             bnb_4bit_compute_dtype=torch.bfloat16,
         )
-        # Copy the model to each device
         device_map = {"": Accelerator().local_process_index}
         torch_dtype = torch.bfloat16
     else:
@@ -132,7 +124,7 @@ def save_config(script_args, fed_args):
     output_dir = f"{script_args.output_dir}/{dataset_name_split}_{script_args.dataset_sample}_{fed_args.fed_alg}_c{fed_args.num_clients}s{fed_args.sample_clients}_i{script_args.max_steps}_b{script_args.batch_size}a{script_args.gradient_accumulation_steps}_l{script_args.seq_length}_r{script_args.peft_lora_r}a{script_args.peft_lora_alpha}_{now_time}"
     while True:
         if not os.path.exists(output_dir):
-            os.mkdir(output_dir)
+            os.makedirs(output_dir)
             break
         else:
             now_time = (datetime.now() + timedelta(seconds=1)).strftime("%Y%m%d%H%M%S")
@@ -145,3 +137,4 @@ def save_config(script_args, fed_args):
             "fed_args": asdict(fed_args),
         }
         json.dump(combined_dict, f, indent=4)
+

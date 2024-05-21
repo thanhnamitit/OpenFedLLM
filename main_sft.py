@@ -11,6 +11,23 @@ from utils import *
 from federated_learning import *
 from config import get_config, save_config, get_model_config, get_training_args
 
+import bitsandbytes as bnb
+def find_all_linear_names(model):
+    return ['down_proj', 'k_proj', 'o_proj', 'gate_proj', 'q_proj', 'v_proj', 'up_proj']
+    cls = bnb.nn.Linear4bit #if args.bits == 4 else (bnb.nn.Linear8bitLt if args.bits == 8 else torch.nn.Linear)
+    lora_module_names = set()
+    for name, module in model.named_modules():
+        print(f"{name} {module}")
+        if isinstance(module, cls):
+            print('if 1')
+            names = name.split('.')
+            lora_module_names.add(names[0] if len(names) == 1 else names[-1])
+        if 'lm_head' in lora_module_names: # needed for 16-bit
+            lora_module_names.remove('lm_head')
+            print('if 2')
+    return list(lora_module_names)
+#
+
 # ===== Define the arguments =====
 script_args, fed_args, peft_config = get_config()
 training_args = get_training_args(script_args, script_args.learning_rate)
@@ -27,7 +44,6 @@ sample_num_list = [len(local_datasets[i]) for i in range(fed_args.num_clients)]
 
 # ===== Get model config =====
 device_map, quantization_config, torch_dtype = get_model_config(script_args)
-
 model = AutoModelForCausalLM.from_pretrained(
     script_args.model_name_or_path,
     quantization_config=quantization_config,
@@ -35,12 +51,15 @@ model = AutoModelForCausalLM.from_pretrained(
     trust_remote_code=script_args.trust_remote_code,
     torch_dtype=torch_dtype,
 )
+print(model)
 
 if script_args.load_in_8bit or script_args.load_in_4bit:
     model = prepare_model_for_kbit_training(
                 model, use_gradient_checkpointing=training_args.gradient_checkpointing
             )
-
+modules = find_all_linear_names(model)
+print(modules)
+peft_config.target_modules = modules
 model = get_peft_model(model, peft_config)
 model.print_trainable_parameters()
 
